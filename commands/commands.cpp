@@ -28,6 +28,7 @@
 
 #include "commands.h"
 #include "lorawan_types.h"
+#include <inttypes.h>
 
 extern Serial pc;
 extern DeviceConfig_t device_config;
@@ -37,7 +38,7 @@ bool exit_cmd_mode = false;
 
 static char prompt[] = "$ ";
 static char ok_str[] = "\r\nOK\r\n";
-static char error_str[] = "\r\nerror\r\n";
+// static char error_str[] = "\r\nerror\r\n";
 static char invalid_args_str[] = "\r\ninvalid args\r\n";
 
 tinysh_cmd_t reset_cmd = { 0, "reset", "reset command", "", reset_func, 0, 0, 0 };
@@ -46,12 +47,21 @@ tinysh_cmd_t deveui_cmd = { 0, "deveui", "deveui command", "", deveui_func, 0, 0
 tinysh_cmd_t appeui_cmd = { 0, "appeui", "appeui command", "", appeui_func, 0, 0, 0 };
 tinysh_cmd_t appkey_cmd = { 0, "appkey", "appkey command", "", appkey_func, 0, 0, 0 };
 
+tinysh_cmd_t devaddr_cmd = { 0, "devaddr", "devaddr command", "", devaddr_func, 0, 0, 0 };
+tinysh_cmd_t nwkskey_cmd = { 0, "nwkskey", "nwkskey command", "", nwkskey_func, 0, 0, 0 };
+tinysh_cmd_t appskey_cmd = { 0, "appskey", "appskey command", "", appskey_func, 0, 0, 0 };
+
+tinysh_cmd_t ucnt_cmd = { 0, "ucnt", "uplink count command", "", ucnt_func, 0, 0, 0 };
+tinysh_cmd_t dcnt_cmd = { 0, "dcnt", "downlink count command", "", dcnt_func, 0, 0, 0 };
+
 tinysh_cmd_t join_cmd = { 0, "join", "join network", "", join_func, 0, 0, 0 };
 tinysh_cmd_t send_cmd = { 0, "send", "send packet", "<PAYLOAD>", send_func, 0, 0, 0 };
+tinysh_cmd_t recv_cmd = { 0, "recv", "recv packet", "<TIMEOUT>", recv_func, 0, 0, 0 };
 
 tinysh_cmd_t channels_cmd = { 0, "channels", "list channels", "", channels_func, 0, 0, 0 };
-tinysh_cmd_t channel_index_cmd = { 0, "channel_index", "current channel index", "0-2,-1", channel_index_func, 0, 0, 0 };
+tinysh_cmd_t channel_index_cmd = { 0, "index", "current channel index", "0-2,-1", channel_index_func, 0, 0, 0 };
 tinysh_cmd_t datarate_cmd = { 0, "datarate", "datarate setting", "0-15", datarate_func, 0, 0, 0 };
+tinysh_cmd_t power_cmd = { 0, "power", "power setting", "0-15", power_func, 0, 0, 0 };
 
 tinysh_cmd_t app_port_cmd = { 0, "port", "Application port", "0-255", app_port_func, 0, 0, 0 };
 
@@ -180,7 +190,7 @@ void InitApplication( void )
 
     SetAntennaSwitch( 1 );
 
-    wait_ms( 500 ); // wait for on board DC/DC start-up time
+    ThisThread::sleep_for( 500 ); // wait for on board DC/DC start-up time
 
     Radio.Init( );
 
@@ -268,6 +278,7 @@ void OnCadDone( bool channelActivityDetected )
     // printf("OnCadDone\r\n");
 }
 
+int tx_channel_index = -1;
 uint32_t tx_channels[] = { 2403000000U, 2479000000U, 2425000000U };
 uint32_t rx2_channel = 2423000000U;
 
@@ -314,6 +325,10 @@ void FillJoinRequest(uint8_t* buffer, uint16_t nonce, uint8_t* key) {
 
 void ChooseRandomChannel() {
     int i = rand() % 3;
+
+    if (tx_channel_index != -1 && tx_channel_index < 3)
+        i = tx_channel_index;
+
     printf("Using channel %u : %lu\r\n", i, tx_channels[i]);
     Radio.SetRfFrequency( tx_channels[i] );
 }
@@ -356,7 +371,7 @@ void ProcessRadioEvents(int32_t timeout) {
 
     while (tm.read_ms() < timeout) {
         Radio.ProcessIrqs();
-        wait_ms(10);
+        ThisThread::sleep_for(10);
     }
 }
 
@@ -380,7 +395,7 @@ void GetJoinRxPacketInfo(uint8_t* key) {
     printf("\r\n");
 }
 
-int GetRxPacketInfo() {
+uint16_t GetRxPacketInfo() {
 
     Radio.GetPayload( RxBuffer, &RxBufferSize, BUFFER_SIZE );
     Radio.GetPacketStatus( &PacketStatus );
@@ -439,7 +454,7 @@ int UnpackJoinAccept(uint8_t* key, uint16_t nonce) {
 
     crypto.DeriveSessionKeys(device_config.settings.AppKey, appNonce, netID, nonce, device_config.session.NetworkKey, device_config.session.DataKey);
 
-    printf("Dev Addr: %08X\r\n", device_config.session.NetworkAddress);
+    printf("Dev Addr: %08lX\r\n", device_config.session.NetworkAddress);
 
     printf("Nwk SKey: ");
     for (int i = 0; i < 16; ++i) {
@@ -600,6 +615,42 @@ void appeui_func(int argc, char **argv) {
     }
 }
 
+void devaddr_func(int argc, char **argv) {
+    if (argc == 1) {
+        print_hex_str((uint8_t*)&device_config.session.NetworkAddress, 4);
+        printf("\r\n");
+    } else if (argc == 2 && (strlen(argv[1]) == 8)) {
+        read_hex_str(argv[1], (uint8_t*)&device_config.session.NetworkAddress, 4);
+        printf(ok_str);
+    } else {
+        printf(invalid_args_str);
+    }
+}
+
+void appskey_func(int argc, char **argv) {
+    if (argc == 1) {
+        print_hex_str(device_config.session.DataKey, 16);
+        printf("\r\n");
+    } else if (argc == 2 && (strlen(argv[1]) == 32)) {
+        read_hex_str(argv[1], device_config.session.DataKey, 16);
+        printf(ok_str);
+    } else {
+        printf(invalid_args_str);
+    }
+}
+
+void nwkskey_func(int argc, char **argv) {
+    if (argc == 1) {
+        print_hex_str(device_config.session.NetworkKey, 16);
+        printf("\r\n");
+    } else if (argc == 2 && (strlen(argv[1]) == 32)) {
+        read_hex_str(argv[1], device_config.session.NetworkKey, 16);
+        printf(ok_str);
+    } else {
+        printf(invalid_args_str);
+    }
+}
+
 void appkey_func(int argc, char **argv) {
     if (argc == 1) {
         print_hex_str(device_config.settings.AppKey, 16);
@@ -627,37 +678,9 @@ void datarate_func(int argc, char **argv) {
     if (argc == 1) {
         printf("\r\nDR%u\r\n", device_config.settings.TxDataRate);
     } else if (argc == 2 && (strlen(argv[1]) == 1)) {
-        read_hex_str(argv[1], &device_config.settings.TxDataRate, 1);
-        printf(ok_str);
-    } else {
-        printf(invalid_args_str);
-    }
-}
-
-void device_class_func(int argc, char **argv) {
-    if (argc == 1) {
-        printf("\r\n%s\r\n", device_config.settings.Class == CLASS_A ? "A" : "C");
-    } else if (argc == 2 && strlen(argv[1]) == 1) {
-        if (argv[1][0] == 'A' || argv[1][0] == 'a') {
-            device_config.settings.Class = CLASS_A;
-            printf(ok_str);
-        } else if (argv[1][0] == 'C' || argv[1][0] == 'c') {
-            device_config.settings.Class = CLASS_C;
-            printf(ok_str);
-        } else {
-            printf(invalid_args_str);
-        }
-    } else {
-        printf(invalid_args_str);
-    }
-}
-
-void adr_func(int argc, char **argv) {
-    if (argc == 1) {
-        printf("\r\n%d\r\n", device_config.settings.EnableADR);
-    } else if (argc == 2 && strlen(argv[1]) == 1) {
-        if (argv[1][0] == '0' || argv[1][0] == '1') {
-            device_config.settings.EnableADR = (argv[1][0] == '1');
+        int val = 1;
+        if (sscanf(argv[1], "%d", &val) && val >= 0 && val <= 15) {
+            device_config.settings.TxDataRate = val;
             printf(ok_str);
         } else {
             printf(invalid_args_str);
@@ -672,7 +695,7 @@ void app_port_func(int argc, char **argv) {
         printf("\r\n%d\r\n", device_config.settings.Port);
     } else if (argc == 2) {
         int val = 1;
-        if (sscanf(argv[1], "%d", &val)) {
+        if (sscanf(argv[1], "%d", &val) && val >= 0 && val <= 255) {
             device_config.settings.Port = val;
             printf(ok_str);
         } else {
@@ -683,12 +706,13 @@ void app_port_func(int argc, char **argv) {
     }
 }
 
-void duty_cycle_func(int argc, char **argv) {
+void ucnt_func(int argc, char **argv) {
     if (argc == 1) {
-        printf("\r\n%d\r\n", device_config.app_settings.DutyCycleEnabled);
-    } else if (argc == 2 && strlen(argv[1]) == 1) {
-        if (argv[1][0] == '0' || argv[1][0] == '1') {
-            device_config.app_settings.DutyCycleEnabled = (argv[1][0] == '1');
+        printf("\r\n%lu\r\n", device_config.session.UplinkCounter);
+    } else if (argc == 2) {
+        uint32_t val = 0;
+        if (sscanf(argv[1], "%" SCNu32, &val)) {
+            device_config.session.UplinkCounter = val;
             printf(ok_str);
         } else {
             printf(invalid_args_str);
@@ -698,13 +722,30 @@ void duty_cycle_func(int argc, char **argv) {
     }
 }
 
-void tx_interval_func(int argc, char **argv) {
+void dcnt_func(int argc, char **argv) {
     if (argc == 1) {
-        printf("\r\n%lu\r\n", device_config.app_settings.TxInterval);
+        printf("\r\n%lu\r\n", device_config.session.DownlinkCounter);
     } else if (argc == 2) {
-        int val = 10000;
+        uint32_t val = 0;
+        if (sscanf(argv[1], "%" SCNu32, &val)) {
+            device_config.session.DownlinkCounter = val;
+            printf(ok_str);
+        } else {
+            printf(invalid_args_str);
+        }
+    } else {
+        printf(invalid_args_str);
+    }
+}
+
+void power_func(int argc, char **argv) {
+    if (argc == 1) {
+        printf("\r\n%d\r\n", device_config.settings.TxPower);
+    } else if (argc == 2) {
+        int val = 1;
         if (sscanf(argv[1], "%d", &val)) {
-            device_config.app_settings.TxInterval = val;
+            device_config.settings.TxPower = val;
+            Radio.SetTxParams( device_config.settings.TxPower, RADIO_RAMP_20_US );
             printf(ok_str);
         } else {
             printf(invalid_args_str);
@@ -716,11 +757,31 @@ void tx_interval_func(int argc, char **argv) {
 
 
 void channels_func(int argc, char **argv) {
-
+    if (argc == 1) {
+        for (int i = 0; i < 3; i++) {
+            printf("\r\nchan %d : %lu", i, tx_channels[i]);         
+        }
+        printf(ok_str);
+    } else {
+        printf(invalid_args_str);
+    }
 }
 
 
 void channel_index_func(int argc, char **argv) {
+    if (argc == 1) {
+        printf("\r\n%d\r\n", tx_channel_index);        
+    } else if (argc == 2) {
+        int val = 1;
+        if (sscanf(argv[1], "%d", &val) && val >= -1 && val < 3) {
+            tx_channel_index = val;
+            printf(ok_str);
+        } else {
+            printf(invalid_args_str);
+        }
+    } else {
+        printf(invalid_args_str);
+    }
 }
 
 void join_func(int argc, char **argv) {
@@ -729,7 +790,7 @@ void join_func(int argc, char **argv) {
 
     rx_2_datarate = 0;
 
-    printf("DevNonce: %d\r\n",  nonce);
+    printf("DevNonce: %lu\r\n",  nonce);
 
     FillJoinRequest(join_request, nonce, device_config.settings.AppKey);
 
@@ -780,6 +841,28 @@ void join_func(int argc, char **argv) {
     
 }
 
+void recv_func(int argc, char **argv) {
+
+    int timeout = 3000;
+
+    if (argc == 1) {
+        // use default timeout
+    } else if (argc == 2) {
+        if (sscanf(argv[1], "%d", &timeout)) {
+            printf(ok_str);
+        } else {
+            printf(invalid_args_str);
+        }
+    } else {
+        printf(invalid_args_str);
+        return;
+    }
+
+    printf("Open Rx Window %lu MHz DR%d\r\n", tx_channels[tx_channel_index], device_config.settings.TxDataRate);
+    SetRxMode(tx_channels[tx_channel_index], device_config.settings.TxDataRate);
+    Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, (uint16_t)timeout });
+    ProcessRadioEvents(timeout);
+}
 
 void send_func(int argc, char **argv) {
     
@@ -813,7 +896,7 @@ void send_func(int argc, char **argv) {
     ChooseRandomChannel();
     SetTxMode();
 
-    printf("Sending packet FCNT: %d\r\n", device_config.session.UplinkCounter);
+    printf("Sending packet FCNT: %lu\r\n", device_config.session.UplinkCounter);
     Radio.SendPayload( Buffer, PacketParams.Params.LoRa.PayloadLength, ( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, 10000 } );
 
     tx_mac_cmd_size = 0;
@@ -843,13 +926,15 @@ void send_func(int argc, char **argv) {
     if (packet_rxd) {
         uint8_t mac_cmd_buffer[20];
         int mac_cmd_size = 0;
-        int fcnt = GetRxPacketInfo();
-
-        // TODO: Handle 16-bit rollover
+        uint16_t fcnt = GetRxPacketInfo();
 
         // Check MIC
-        if (CheckMic(device_config.session.NetworkKey, fcnt)) {
-
+        // TODO: Handle 16-bit rollover
+        if (CheckMic(device_config.session.NetworkKey, fcnt) 
+            && device_config.session.DownlinkCounter < fcnt) {
+            
+            device_config.session.DownlinkCounter = fcnt;
+           
             mac_cmd_size = DecryptPayload(mac_cmd_buffer);
 
             if (RxBufferSize - mac_cmd_size > 13) {
@@ -862,7 +947,6 @@ void send_func(int argc, char **argv) {
             }
 
             if (mac_cmd_size > 0) {
-
 
                 printf("Rx MAC Commands: ");
                 for (int i = 0; i < mac_cmd_size; ++i) {
@@ -926,11 +1010,19 @@ void tinyshell_thread() {
     
     tinysh_add_command(&join_cmd);
     tinysh_add_command(&send_cmd);
+    tinysh_add_command(&recv_cmd);
 
+    tinysh_add_command(&devaddr_cmd);
+    tinysh_add_command(&nwkskey_cmd);
+    tinysh_add_command(&appskey_cmd);
+    tinysh_add_command(&ucnt_cmd);
+    tinysh_add_command(&dcnt_cmd);
+    
     tinysh_add_command(&channels_cmd);
     tinysh_add_command(&channel_index_cmd);
-
+    tinysh_add_command(&power_cmd);
     tinysh_add_command(&datarate_cmd);
+
     tinysh_add_command(&app_port_cmd);
     
     while (!exit_cmd_mode) {

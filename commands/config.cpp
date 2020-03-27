@@ -52,7 +52,6 @@ void ConfigManager::Wakeup() {
 
 }
 
-
 void ConfigManager::Load(DeviceConfig_t& dc) {
     DefaultProtected(dc);    
     DefaultSettings(dc);
@@ -61,8 +60,7 @@ void ConfigManager::Load(DeviceConfig_t& dc) {
 }
 
 void ConfigManager::DefaultSettings(DeviceConfig_t& dc) {
-    dc.app_settings.DutyCycleEnabled = false;
-    dc.app_settings.TxInterval = 10000;
+    dc.settings.TxPower = 10;
 }
 
 void ConfigManager::DefaultSession(DeviceConfig_t& dc) {

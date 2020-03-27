@@ -46,9 +46,17 @@ void appkey_func(int argc, char **argv);
 void channels_func(int argc, char **argv);
 void channel_index_func(int argc, char **argv);
 void datarate_func(int argc, char **argv);
+void power_func(int argc, char **argv);
 
 void join_func(int argc, char **argv);
 void send_func(int argc, char **argv);
+void recv_func(int argc, char **argv);
+
+void devaddr_func(int argc, char **argv);
+void nwkskey_func(int argc, char **argv);
+void appskey_func(int argc, char **argv);
+void ucnt_func(int argc, char **argv);
+void dcnt_func(int argc, char **argv);
 
 void app_port_func(int argc, char **argv);
 

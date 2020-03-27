@@ -50,7 +50,7 @@ int main(void)
     InitApplication();
     SetupRadio();
 
-    printf("RTC Time: %d seconds\r\n", time(NULL));
+    printf("RTC Time: %lu seconds\r\n", time(NULL));
 
     wait_for_command();
     
