@@ -9,20 +9,20 @@ Serial pc(USBTX, USBRX);
 void wait_for_command() {
     bool cmd_mode = false;
 
-    Timer tm;
-    tm.start();
+    // Timer tm;
+    // tm.start();
 
-    printf("Press a key to enter command mode\r\n");
+    // printf("Press a key to enter command mode\r\n");
 
-    while (tm.read_ms() < 1000) {
-        if (pc.readable()) {
-            while (pc.readable()) {
-                pc.getc();
-            }
-            cmd_mode = true;
-            break;
-        }
-    }
+    // while (tm.read_ms() < 1000) {
+    //     if (pc.readable()) {
+    //         while (pc.readable()) {
+    //             pc.getc();
+    //         }
+    //         cmd_mode = true;
+    //         break;
+    //     }
+    // }
 
     cmd_mode = true;
 

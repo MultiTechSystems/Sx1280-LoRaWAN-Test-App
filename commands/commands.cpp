@@ -63,7 +63,7 @@ tinysh_cmd_t channel_index_cmd = { 0, "index", "current channel index", "0-2,-1"
 tinysh_cmd_t datarate_cmd = { 0, "datarate", "datarate setting", "0-15", datarate_func, 0, 0, 0 };
 tinysh_cmd_t power_cmd = { 0, "power", "power setting", "0-15", power_func, 0, 0, 0 };
 
-tinysh_cmd_t app_port_cmd = { 0, "port", "Application port", "0-255", app_port_func, 0, 0, 0 };
+tinysh_cmd_t app_port_cmd = { 0, "port", "application port", "0-255", app_port_func, 0, 0, 0 };
 
 
 #define RX_TIMEOUT_MS 500
@@ -71,6 +71,11 @@ tinysh_cmd_t app_port_cmd = { 0, "port", "Application port", "0-255", app_port_f
 #define PKT_FCTRL 5
 #define PKT_PORT 8
 #define PKT_PAYLOAD 9
+#define PKT_MIC_LEN 4
+
+#define PKT_JOIN_ACCEPT_APP_NONCE 1
+#define PKT_JOIN_ACCEPT_NET_ID 4
+#define PKT_JOIN_ACCEPT_DEV_ADDR 7
 
 
 bool joined = false;
@@ -369,7 +374,7 @@ void ProcessRadioEvents(int32_t timeout) {
     Timer tm;
     tm.start();
 
-    while (tm.read_ms() < timeout) {
+    while (tm.read_ms() < timeout && !packet_rxd) {
         Radio.ProcessIrqs();
         ThisThread::sleep_for(10);
     }
@@ -412,11 +417,32 @@ uint16_t GetRxPacketInfo() {
     return fcnt;
 }
 
+uint32_t read_u32(uint8_t* buff) {
+    return buff[0] << 24 
+        | buff[1] << 16 
+        | buff[2] << 8 
+        | buff[3] << 0;
+}
+
+uint32_t read_u32_r(uint8_t* buff) {
+    return buff[3] << 24 
+        | buff[2] << 16 
+        | buff[1] << 8 
+        | buff[0] << 0;
+}
+
+void copy_u32_r(uint8_t* dst, uint32_t src) {
+    dst[0] = src & 0xFF;
+    dst[1] = src >> 8;
+    dst[2] = src >> 16;
+    dst[3] = src >> 24;
+}
+
 bool CheckJoinMic(uint8_t* key) {
     uint32_t mic = 0;
-    crypto.JoinComputeMic(RxBuffer, RxBufferSize-4, key, &mic);
+    crypto.JoinComputeMic(RxBuffer, RxBufferSize-PKT_MIC_LEN, key, &mic);
 
-    uint32_t rx_mic = RxBuffer[RxBufferSize-1] << 24 | RxBuffer[RxBufferSize-2] << 16 | RxBuffer[RxBufferSize-3] << 8 | RxBuffer[RxBufferSize-4] << 0;
+    uint32_t rx_mic = read_u32_r(RxBuffer + RxBufferSize-PKT_MIC_LEN);
 
     printf("Join MIC: %lu RXMIC: %lu\r\n", mic, rx_mic);
 
@@ -426,9 +452,9 @@ bool CheckJoinMic(uint8_t* key) {
 bool CheckMic(uint8_t* key, uint32_t counter) {
     uint32_t mic = 0;
     // void Crypto::ComputeMic(uint8_t *buffer, uint16_t size, uint8_t *key, uint32_t address, uint8_t dir, uint32_t sequenceCounter, uint32_t *mic)
-    crypto.ComputeMic(RxBuffer, RxBufferSize-4, key, device_config.session.NetworkAddress, 1, counter, &mic);
+    crypto.ComputeMic(RxBuffer, RxBufferSize-PKT_MIC_LEN, key, device_config.session.NetworkAddress, 1, counter, &mic);
 
-    uint32_t rx_mic = RxBuffer[RxBufferSize-1] << 24 | RxBuffer[RxBufferSize-2] << 16 | RxBuffer[RxBufferSize-3] << 8 | RxBuffer[RxBufferSize-4] << 0;
+    uint32_t rx_mic = read_u32_r(RxBuffer + RxBufferSize-PKT_MIC_LEN);
 
     printf("Pkt MIC: %lu RXMIC: %lu\r\n", mic, rx_mic);
 
@@ -448,9 +474,9 @@ int UnpackJoinAccept(uint8_t* key, uint16_t nonce) {
     // 0  1 2 3  4 5 6  7 8 9 10 11 12  13                            28 29    32
     // 20 6E0000 130000 0E000027 00 05  00000000000000000000000000000000 3530970C
 
-    uint8_t* appNonce = RxBuffer+1;
-    uint8_t* netID = RxBuffer+4;
-    device_config.session.NetworkAddress = RxBuffer[7] | RxBuffer[8] << 8 | RxBuffer[9] << 16 | RxBuffer[10] << 24;
+    uint8_t* appNonce = RxBuffer+PKT_JOIN_ACCEPT_APP_NONCE;
+    uint8_t* netID = RxBuffer+PKT_JOIN_ACCEPT_NET_ID;
+    device_config.session.NetworkAddress = read_u32_r(RxBuffer +PKT_JOIN_ACCEPT_DEV_ADDR);
 
     crypto.DeriveSessionKeys(device_config.settings.AppKey, appNonce, netID, nonce, device_config.session.NetworkKey, device_config.session.DataKey);
 
@@ -494,10 +520,8 @@ void InitTxPacket(bool confirmed, uint8_t port) {
     else
         Buffer[0] = 0x40; // Unconfirmed Uplink
 
-    Buffer[1] = device_config.session.NetworkAddress & 0xFF;
-    Buffer[2] = device_config.session.NetworkAddress >> 8;
-    Buffer[3] = device_config.session.NetworkAddress >> 16;
-    Buffer[4] = device_config.session.NetworkAddress >> 24;
+    copy_u32_r(Buffer + 1, device_config.session.NetworkAddress);
+
     Buffer[5] = 0x00; // FCtrl
     Buffer[6] = 0;    // FCnt
     Buffer[7] = 0;    // FCnt
@@ -786,10 +810,13 @@ void channel_index_func(int argc, char **argv) {
 
 void join_func(int argc, char **argv) {
 
+    printf(ok_str);
+
     static uint32_t nonce = time(NULL);
 
+    rx_1_time_out = 5000;
     rx_2_datarate = 0;
-
+    
     printf("DevNonce: %lu\r\n",  nonce);
 
     FillJoinRequest(join_request, nonce, device_config.settings.AppKey);
@@ -844,28 +871,120 @@ void join_func(int argc, char **argv) {
 void recv_func(int argc, char **argv) {
 
     int timeout = 3000;
+    int packets = 1;
 
     if (argc == 1) {
         // use default timeout
-    } else if (argc == 2) {
+    } else if (argc >= 2) {
         if (sscanf(argv[1], "%d", &timeout)) {
             printf(ok_str);
         } else {
             printf(invalid_args_str);
+        }
+        if (argc > 2) {
+            if (sscanf(argv[2], "%d", &packets)) {
+                printf(ok_str);
+            } else {
+                printf(invalid_args_str);
+            }
         }
     } else {
         printf(invalid_args_str);
         return;
     }
 
-    printf("Open Rx Window %lu MHz DR%d\r\n", tx_channels[tx_channel_index], device_config.settings.TxDataRate);
-    SetRxMode(tx_channels[tx_channel_index], device_config.settings.TxDataRate);
-    Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, (uint16_t)timeout });
-    ProcessRadioEvents(timeout);
+    uint32_t freq = rx2_channel;
+
+    if (tx_channel_index != -1)
+        freq = tx_channels[tx_channel_index];
+
+    
+    do {
+        packet_rxd = false;
+
+        printf("Open Rx Window %lu MHz DR%d\r\n", freq, device_config.settings.TxDataRate);
+        SetRxMode(freq, device_config.settings.TxDataRate);
+
+        uint16_t rx_timeout = (uint16_t)(timeout > 0 ? timeout : 30000);
+        Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, rx_timeout });
+        ProcessRadioEvents( rx_timeout );
+
+        if (packet_rxd) {
+            uint8_t mac_cmd_buffer[20];
+            int mac_cmd_size = 0;
+            uint16_t fcnt = GetRxPacketInfo();
+
+            // Check MIC
+            // TODO: Handle 16-bit rollover
+            if (CheckMic(device_config.session.NetworkKey, fcnt) 
+                && device_config.session.DownlinkCounter < fcnt) {
+                
+                device_config.session.DownlinkCounter = fcnt;
+            
+                mac_cmd_size = DecryptPayload(mac_cmd_buffer);
+
+                if (RxBufferSize - mac_cmd_size > 13) {
+                    // Received Payload from Server
+                    printf("Rx Packet on Port %d: ", RxBuffer[8+mac_cmd_size]);
+                    for (int i = 9 + mac_cmd_size; i < RxBufferSize - 4; ++i) {
+                        printf("%02X", RxBuffer[i]);
+                    }
+                    printf("\r\n");
+                }
+
+                if (mac_cmd_size > 0) {
+
+                    printf("Rx MAC Commands: ");
+                    for (int i = 0; i < mac_cmd_size; ++i) {
+                        printf("%02X", mac_cmd_buffer[i]);
+                    }
+                    printf("\r\n");
+                    // Process MAC Commands
+
+                    for (int i = 0; i < mac_cmd_size; ++i) {
+                        // Handle Rx Timing Req
+                        if (mac_cmd_buffer[i] == 0x08) {
+                            // 1 byte payload
+                            i+=1;
+
+                            // Unpack Rx1Delay
+                            int delay = (mac_cmd_buffer[i] & 0xF);
+                            if (delay > 1)
+                                rx_1_time_out = delay * 1000U;
+                            else
+                                rx_1_time_out = 1000U;
+
+                            tx_mac_cmd_buffer[tx_mac_cmd_size++] = 0x08; // Command ID
+                        }
+
+                        // Handle DevStatusReq
+                        if (mac_cmd_buffer[i] == 0x06) {
+                            // 0 byte payload
+                            tx_mac_cmd_buffer[tx_mac_cmd_size++] = 0x06;                      // Command ID
+                            tx_mac_cmd_buffer[tx_mac_cmd_size++] = PacketStatus.LoRa.SnrPkt;  // Received Packet SNR
+                            tx_mac_cmd_buffer[tx_mac_cmd_size++] = 0xFF;                      // Battery Level
+                        }
+                    }
+
+                    printf("Tx MAC Commands: ");
+                    for (int i = 0; i < tx_mac_cmd_size; ++i) {
+                        printf("%02X", tx_mac_cmd_buffer[i]);
+                    }
+                    printf("\r\n");
+
+                }
+            } else {
+                printf("Failed MIC verification\r\n");
+            }
+        }
+    } while (timeout < 0 && --packets > 0);
+
 }
 
 void send_func(int argc, char **argv) {
     
+    printf(ok_str);
+
     InitTxPacket(false, device_config.settings.Port);
 
     uint32_t event_time = 0;
@@ -882,6 +1001,8 @@ void send_func(int argc, char **argv) {
     Buffer[PKT_PORT] = device_config.settings.Port;
 
     int index = PKT_PAYLOAD;
+
+    // TODO: accept args and replace packet payload
 
     // Add 5 Payload Bytes
     Buffer[index++] = event_time >> 16;
@@ -999,7 +1120,7 @@ void tinysh_char_out(unsigned char c) {
 }
 
 void tinyshell_thread() {
-    pc.printf("MTS LoRaWAN shell build %s %s\r\n", __DATE__, __TIME__);
+    pc.printf("Multitech Sx1280 LoRaWAN shell\r\nBuilt: %s %s\r\n", __DATE__, __TIME__);
 
     tinysh_set_prompt(prompt);
     tinysh_add_command(&reset_cmd);
