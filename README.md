@@ -2,7 +2,7 @@
 
 Simple LoRaWAN ISM2400 stack for Sx1280 Driver in polling mode
 
-Tested with mbed-os-5.13.4
+Tested with mbed-os-5.15.1
 
 # Available Commands
 $
