@@ -5,7 +5,7 @@ Simple LoRaWAN ISM2400 stack for Sx1280 Driver in polling mode
 Tested with mbed-os-5.15.1
 
 # Available Commands
-$
+```
 help      display help
 reset     reset command
 deveui    deveui command
@@ -24,3 +24,4 @@ index     current channel index
 power     power setting
 datarate  datarate setting
 port      application port
+```
