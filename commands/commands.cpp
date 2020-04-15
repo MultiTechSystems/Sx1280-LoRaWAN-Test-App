@@ -56,6 +56,7 @@ tinysh_cmd_t dcnt_cmd = { 0, "dcnt", "downlink count command", "", dcnt_func, 0,
 
 tinysh_cmd_t join_cmd = { 0, "join", "join network", "", join_func, 0, 0, 0 };
 tinysh_cmd_t send_cmd = { 0, "send", "send packet", "<PAYLOAD>", send_func, 0, 0, 0 };
+tinysh_cmd_t sendi_cmd = { 0, "sendi", "send packet", "<TIMEOUT> <PACKETS> <PAYLOAD>", sendi_func, 0, 0, 0 };
 tinysh_cmd_t recv_cmd = { 0, "recv", "recv packet", "<TIMEOUT>", recv_func, 0, 0, 0 };
 
 tinysh_cmd_t channels_cmd = { 0, "channels", "list channels", "", channels_func, 0, 0, 0 };
@@ -981,6 +982,36 @@ void recv_func(int argc, char **argv) {
 
 }
 
+void sendi_func(int argc, char **argv) {
+    int timeout = 10000;
+    int packets = 10;
+
+    if (argc == 1) {
+        // use default timeout
+    } else if (argc >= 2) {
+        if (sscanf(argv[1], "%d", &timeout)) {
+            printf(ok_str);
+        } else {
+            printf(invalid_args_str);
+        }
+        if (argc > 2) {
+            if (sscanf(argv[2], "%d", &packets)) {
+                printf(ok_str);
+            } else {
+                printf(invalid_args_str);
+            }
+        }
+    } else {
+        printf(invalid_args_str);
+        return;
+    }
+
+    for (int i = 0; i < packets; i++) {
+        send_func(argc, argv);
+        ThisThread::sleep_for(timeout);
+    }
+}
+
 void send_func(int argc, char **argv) {
     
     printf(ok_str);
@@ -1131,6 +1162,7 @@ void tinyshell_thread() {
     
     tinysh_add_command(&join_cmd);
     tinysh_add_command(&send_cmd);
+    tinysh_add_command(&sendi_cmd);
     tinysh_add_command(&recv_cmd);
 
     tinysh_add_command(&devaddr_cmd);

@@ -50,6 +50,7 @@ void power_func(int argc, char **argv);
 
 void join_func(int argc, char **argv);
 void send_func(int argc, char **argv);
+void sendi_func(int argc, char **argv);
 void recv_func(int argc, char **argv);
 
 void devaddr_func(int argc, char **argv);
