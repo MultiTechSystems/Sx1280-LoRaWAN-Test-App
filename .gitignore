@@ -1,2 +1,3 @@
 .vscode/
 .hg/
+__pycache__

@@ -26,11 +26,18 @@
 ******************************************************************************
 */
 
+/*
+
+$ mbed compile -t GCC_ARM -m MAX32670_LORA
+
+*/
+
 #include "commands.h"
 #include "lorawan_types.h"
 #include <inttypes.h>
 
-extern Serial pc;
+extern BufferedSerial pc;
+extern char ser_buf;
 extern DeviceConfig_t device_config;
 extern ConfigManager config_mng;
 
@@ -99,7 +106,7 @@ void OnTxDone( void );
 /*!
  * \brief Function to be executed on Radio Rx Done event
  */
-void OnRxDone( void );
+void OnRxDone( const uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr );
 
 /*!
  * \brief Function executed on Radio Tx Timeout event
@@ -114,49 +121,55 @@ void OnRxTimeout( void );
 /*!
  * \brief Function executed on Radio Rx Error event
  */
-void OnRxError( IrqErrorCode_t );
+void OnRxError( void );
 
-/*!
- * \brief Function executed on Radio Rx Error event
- */
-void OnRangingDone( IrqRangingCode_t );
 
 /*!
  * \brief All the callbacks are stored in a structure
  */
-RadioCallbacks_t Callbacks =
+radio_events_t Callbacks =
 {
-    &OnTxDone,        // txDone
-    &OnRxDone,        // rxDone
-    NULL,             // syncWordDone
-    NULL,             // headerDone
-    &OnTxTimeout,     // txTimeout
-    &OnRxTimeout,     // rxTimeout
-    &OnRxError,       // rxError
-    &OnRangingDone,   // rangingDone
-    NULL,             // cadDone
+    .tx_done                = &OnTxDone,
+    .tx_timeout             = &OnTxTimeout,      
+    .rx_done                = &OnRxDone,           
+    .rx_timeout             = &OnRxTimeout,    
+    .rx_error               = &OnRxError,       
+    .fhss_change_channel    = NULL,
+    .cad_done               = NULL,
 };
 
 /*!
  * \brief Define IO and callbacks for radio
  * mosi, miso, sclk, nss, busy, dio1, dio2, dio3, rst, callbacks
  */
-SX1280Hal Radio( D11, D12, D13, D7, D3, D5, NC, NC, A0, &Callbacks );
+//SX1280Hal Radio( D11, D12, D13, D7, D3, D5, NC, NC, A0, &Callbacks );
+
+SX126X_LoRaRadio Radio(MBED_CONF_SX126X_LORA_DRIVER_SPI_MOSI,
+                       MBED_CONF_SX126X_LORA_DRIVER_SPI_MISO,
+                       MBED_CONF_SX126X_LORA_DRIVER_SPI_SCLK,
+                       MBED_CONF_SX126X_LORA_DRIVER_SPI_CS,
+                       MBED_CONF_SX126X_LORA_DRIVER_RESET,
+                       MBED_CONF_SX126X_LORA_DRIVER_DIO1,
+                       MBED_CONF_SX126X_LORA_DRIVER_BUSY,
+                       MBED_CONF_SX126X_LORA_DRIVER_FREQ_SELECT,
+                       MBED_CONF_SX126X_LORA_DRIVER_DEVICE_SELECT,
+                       MBED_CONF_SX126X_LORA_DRIVER_CRYSTAL_SELECT,
+                       MBED_CONF_SX126X_LORA_DRIVER_ANT_SWITCH);
 
 /*!
  * \brief Control the Antenna Diversity switch
  */
-DigitalOut ANT_SW( A3 );
+// DigitalOut ANT_SW( A3 );
 
 /*!
  * \brief Tx LED toggling on transmition success
  */
-DigitalOut TX_LED( A4 );
+bool TX_LED;
 
 /*!
  * \brief Rx LED toggling on reception success
  */
-DigitalOut RX_LED( A5 );
+bool RX_LED;
 
 /*!
  * \brief Mask of IRQs
@@ -167,11 +180,11 @@ uint16_t IrqMask = 0x0000;
  * \brief Locals parameters and status for radio API
  * NEED TO BE OPTIMIZED, COPY OF STUCTURE ALREADY EXISTING
  */
-PacketParams_t PacketParams;
-PacketStatus_t PacketStatus;
-ModulationParams_t ModulationParams;
+packet_params_t PacketParams;
+packet_status_t PacketStatus;
+modulation_params_t ModulationParams;
 
-void SetAntennaSwitch( int );
+// void SetAntennaSwitch( int );
 void LedBlink( void );
 
 #define RX_TIMEOUT_TICK_SIZE            RADIO_TICK_SIZE_1000_US
@@ -182,7 +195,8 @@ uint8_t BufferSize = BUFFER_SIZE;
 uint8_t Buffer[BUFFER_SIZE];
 uint8_t RxBuffer[BUFFER_SIZE];
 uint8_t RxBufferSize = 0;
-
+uint8_t TxBufferSize = 0;
+int16_t RxRssi = 0;
 bool packet_rxd = false;
 
 uint8_t rx_1_datarate = 0;
@@ -191,25 +205,27 @@ uint8_t rx_2_datarate = 0;
 
 void InitApplication( void )
 {
-    RX_LED = 1;
-    TX_LED = 1;
+    // RX_LED = 1;
+    // TX_LED = 1;
 
-    SetAntennaSwitch( 1 );
+    // SetAntennaSwitch( 1 );
 
     ThisThread::sleep_for( 500 ); // wait for on board DC/DC start-up time
-
-    Radio.Init( );
+    
+    Radio.lock();
+    Radio.init_radio( &Callbacks );
+    Radio.standby();
+    Radio.set_public_network(true);
+    Radio.unlock();
 
     // Can also be set in LDO mode but consume more power
     // Radio Power Mode [0: LDO, 1:DC_DC]
-    Radio.SetRegulatorMode( ( RadioRegulatorModes_t ) 1 );
-    Radio.SetStandby( STDBY_RC );
-
+    // Radio.SetRegulatorMode( ( RadioRegulatorModes_t ) 1 );
+    
     memset( &Buffer, 0x00, BufferSize );
 
     RX_LED = 0;
     TX_LED = 0;
-
 }
 
 void LedBlink( void )
@@ -232,34 +248,41 @@ void LedBlink( void )
     }
 }
 
-void SetAntennaSwitch( int on )
-{
-    if( on == 1 )
-    {
-        ANT_SW = 1; // ANT1
-    }
-    else
-    {
-        ANT_SW = 0; // ANT0
-    }
-}
+// void SetAntennaSwitch( int on )
+// {
+//     if( on == 1 )
+//     {
+//         ANT_SW = 1; // ANT1
+//     }
+//     else
+//     {
+//         ANT_SW = 0; // ANT0
+//     }
+// }
 
 void OnTxDone( void )
 {
-    printf("OnTxDone\r\n");
     TX_LED = 0;
+    printf("TxDone\r\n");
 }
 
-void OnRxDone( void )
+void OnRxDone( const uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr )
 {
     printf("OnRxDone\r\n");
+    RxRssi = rssi;
+    RxBufferSize = size;
+    for( uint8_t i = 0; i < size; i++ )
+    {
+        RxBuffer[i] = payload[i];
+    }
     packet_rxd = true;
     RX_LED = 0;
 }
 
 void OnTxTimeout( void )
 {
-    // printf("OnTxTimeout\r\n");
+    printf("txtimeout\r\n");
+    TX_LED = 0;
 }
 
 void OnRxTimeout( void )
@@ -268,16 +291,16 @@ void OnRxTimeout( void )
     RX_LED = 0;
 }
 
-void OnRxError( IrqErrorCode_t errorCode )
+void OnRxError( void )
 {
     printf("OnRxError\r\n");
     RX_LED = 0;
 }
 
-void OnRangingDone( IrqRangingCode_t val )
-{
-    // printf("OnRangingDone\r\n");
-}
+// void OnRangingDone( IrqRangingCode_t val )
+// {
+//     // printf("OnRangingDone\r\n");
+// }
 
 void OnCadDone( bool channelActivityDetected )
 {
@@ -285,29 +308,50 @@ void OnCadDone( bool channelActivityDetected )
 }
 
 int tx_channel_index = -1;
-uint32_t tx_channels[] = { 2403000000U, 2479000000U, 2425000000U };
-uint32_t rx2_channel = 2423000000U;
+
+uint32_t tx_channels[] = { 902300000U, 
+                            902500000U, 
+                            902700000U,
+                            902900000U, 
+                            903100000U, 
+                            903300000U, 
+                            903500000U, 
+                            903700000U};
+
+uint32_t rx1_channels[] = { 923300000U,
+                            923900000U,
+                            924500000U,
+                            925100000U,
+                            925700000U,
+                            926300000U,
+                            926900000U,
+                            927500000U };
+
+uint32_t rx2_channel = 923300000U; // SF12 BW500
 
 
 void SetupRadio() {
-    ModulationParams.PacketType = PACKET_TYPE_LORA;
-    PacketParams.PacketType = PACKET_TYPE_LORA;
-    ModulationParams.Params.LoRa.SpreadingFactor = LORA_SF12;
-    ModulationParams.Params.LoRa.Bandwidth = LORA_BW_0800;
-    ModulationParams.Params.LoRa.CodingRate = LORA_CR_4_8;
-    PacketParams.Params.LoRa.PreambleLength = 8;
-    PacketParams.Params.LoRa.HeaderType = LORA_PACKET_EXPLICIT;
-    PacketParams.Params.LoRa.PayloadLength = 23;
-    PacketParams.Params.LoRa.Crc = LORA_CRC_ON;
-    PacketParams.Params.LoRa.InvertIQ = LORA_IQ_NORMAL;
-    Radio.SetPacketType( ModulationParams.PacketType );
-    Radio.SetModulationParams( &ModulationParams );
-    Radio.SetPacketParams( &PacketParams );
+    // with how the mbed driver works, this section seems unnecessary
+    ModulationParams.modem_type = MODEM_LORA;
+    PacketParams.modem_type = MODEM_LORA;
+    ModulationParams.params.lora.spreading_factor = LORA_SF12;
+    ModulationParams.params.lora.bandwidth = LORA_BW_500; //LORA_BW_0800; <- original value, not sure what 0800 corresponds to.
+    ModulationParams.params.lora.coding_rate = LORA_CR_4_8;
+    PacketParams.params.lora.preamble_length = 8;
+    PacketParams.params.lora.header_type = LORA_PACKET_EXPLICIT;
+    PacketParams.params.lora.payload_length = 23;
+    PacketParams.params.lora.crc_mode = LORA_CRC_ON;
+    PacketParams.params.lora.invert_IQ = LORA_IQ_NORMAL;
+    // These functions are private for SX126x driver.. 
+    // Radio.set_modem( ModulationParams.modem_type );
+    // Radio.set_modulation_params( &ModulationParams );
+    // Radio.set_packet_params( &PacketParams );
 
-    Radio.SetTxParams( 10, RADIO_RAMP_20_US );
-    Radio.SetPollingMode();
+    // set_tx_power would be a suitable replacement, but the function is private
+    // Radio.SetTxParams( 10, RADIO_RAMP_20_US );
+    // Don't want polling mode
+    // Radio.SetPollingMode();
 
-    
     memset(join_request, 0, 23);
     memset(tx_mac_cmd_buffer, 0, 20);
 }
@@ -315,7 +359,7 @@ void SetupRadio() {
 void FillJoinRequest(uint8_t* buffer, uint16_t nonce, uint8_t* key) {
     uint32_t mic = 0;
 
-    buffer[0] = 0x00;
+    buffer[0] = 0x00;   // MAC Header
 
     for (int i = 0; i < 8; ++i) {
         buffer[8-i] = device_config.settings.AppEUI[i];
@@ -330,63 +374,92 @@ void FillJoinRequest(uint8_t* buffer, uint16_t nonce, uint8_t* key) {
 }
 
 void ChooseRandomChannel() {
-    int i = rand() % 3;
+    int i = rand() % 8;
 
-    if (tx_channel_index != -1 && tx_channel_index < 3)
-        i = tx_channel_index;
+    // if (tx_channel_index != -1 && tx_channel_index < 8)
+    //     i = tx_channel_index;
+
+    tx_channel_index = i;
 
     printf("Using channel %u : %lu\r\n", i, tx_channels[i]);
-    Radio.SetRfFrequency( tx_channels[i] );
+    Radio.lock();
+    Radio.set_channel( tx_channels[i] );
+    Radio.unlock();
 }
 
 void SetTxMode() {
-    PacketParams.Params.LoRa.Crc = LORA_CRC_ON;
-    PacketParams.Params.LoRa.InvertIQ = LORA_IQ_NORMAL;
-    Radio.SetPacketParams( &PacketParams );
+    Radio.lock();
+    Radio.radio_reset();
+    Radio.set_tx_config(MODEM_LORA,            // Modem
+                        22,                    // TxPower (dbm)
+                        0,                     // fdev
+                        0,//LORA_BW_125,       // Bandwidth
+                        0x08,//LORA_SF10,      // Datarate
+                        0x04,//LORA_CR_4_8,    // Code Rate
+                        8,                     // Preamble Len
+                        false,                 // FixLen?
+                        true,                  // CRC?
+                        false,                 // FreqHop?
+                        0,                     // Hop Period
+                        LORA_IQ_NORMAL,        // IQ inverted?
+                        6000);                 // Timeout
+    Radio.set_public_network(true);
+    Radio.unlock();
+    // PacketParams.params.lora.crc_mode = LORA_CRC_ON;
+    // PacketParams.params.lora.invert_IQ = LORA_IQ_NORMAL;
+    // Radio.SetPacketParams( &PacketParams );
 
-    ModulationParams.Params.LoRa.SpreadingFactor = static_cast<RadioLoRaSpreadingFactors_t>((12) << 4);
-    Radio.SetModulationParams( &ModulationParams );
+    // ModulationParams.params.lora.SpreadingFactor = static_cast<RadioLoRaSpreadingFactors_t>((12) << 4);
+    // Radio.SetModulationParams( &ModulationParams );
 
-    IrqMask = IRQ_TX_DONE | IRQ_RX_TX_TIMEOUT;
-    Radio.SetDioIrqParams( IrqMask, IrqMask, IRQ_RADIO_NONE, IRQ_RADIO_NONE );
-
+    // Dio Irq is configured in Radio.send and Radio.receive
+    //IrqMask = IRQ_TX_DONE | IRQ_RX_TX_TIMEOUT;
+    //Radio.SetDioIrqParams( IrqMask, IrqMask, IRQ_RADIO_NONE, IRQ_RADIO_NONE );
     TX_LED = 1;
     packet_rxd = false;
 }
 
 void SetRxMode(uint32_t freq, uint8_t dr) {
-    PacketParams.Params.LoRa.Crc = LORA_CRC_OFF;
-    PacketParams.Params.LoRa.InvertIQ = LORA_IQ_INVERTED;
-    Radio.SetPacketParams( &PacketParams );
-
-    ModulationParams.Params.LoRa.SpreadingFactor = static_cast<RadioLoRaSpreadingFactors_t>((12 - dr) << 4);
-    Radio.SetModulationParams( &ModulationParams );
-
-    if (freq > 0) {
-        Radio.SetRfFrequency( freq );
-    }
-
-    IrqMask = IRQ_RX_DONE | IRQ_RX_TX_TIMEOUT;
-    Radio.SetDioIrqParams( IrqMask, IrqMask, IRQ_RADIO_NONE, IRQ_RADIO_NONE );
     RX_LED = 1;
+    Radio.lock();
+    Radio.set_channel( freq );
+    Radio.set_rx_config(MODEM_LORA,     // Modem
+                        2,              // Bandwidth    // 2 is 500kHz
+                        LORA_SF8,       // DataRate     // should probably use dr
+                        1,              // Coderate     //'1' is just copied from mbed loraphy //LORA_CR_4_8,
+                        0,              // Bandwidth AFC
+                        8,              // Preamble Length
+                        500,            // RxSingle Timeout (symbol)
+                        false,          // FixLen?
+                        0,              // PayloadLen (when FixLen == True)
+                        false,          // CrcOn?
+                        false,          // FreqHopOn?
+                        0,              // Hop Period
+                        true,           // IQ inverted?
+                        true);          // RxContinuous?
+
+    Radio.receive();
+    Radio.unlock();
 }
 
 void ProcessRadioEvents(int32_t timeout) {
-    Timer tm;
-    tm.start();
+    // Timer tm;
+    // tm.start();
 
-    while (tm.read_ms() < timeout && !packet_rxd) {
-        Radio.ProcessIrqs();
-        ThisThread::sleep_for(10);
-    }
+    // while (tm.read_ms() < timeout && !packet_rxd) {
+    //     Radio.ProcessIrqs();
+    //     ThisThread::sleep_for(10);
+    // }
 }
 
 void GetJoinRxPacketInfo(uint8_t* key) {
-    Radio.GetPayload( RxBuffer, &RxBufferSize, BUFFER_SIZE );
-    Radio.GetPacketStatus( &PacketStatus );
+    // Radio.GetPayload( RxBuffer, &RxBufferSize, BUFFER_SIZE );
+    // Radio.GetPacketStatus( &PacketStatus );
 
-    printf("Rx %d Bytes Snr: %d Rssi: %d\r\n", RxBufferSize, PacketStatus.LoRa.SnrPkt, PacketStatus.LoRa.RssiPkt);
-    printf("RxPayload: ");
+    // while(RX_LED == 1);
+
+    printf("Rx %d Bytes Rssi: %d\r\n", RxBufferSize, /*PacketStatus.LoRa.SnrPkt,*/ RxRssi);
+    printf("Encrypted RxPayload: ");
     for (int i = 0; i < RxBufferSize; ++i) {
         printf("%02X", RxBuffer[i]);
     }
@@ -394,7 +467,7 @@ void GetJoinRxPacketInfo(uint8_t* key) {
 
     crypto.JoinDecrypt(RxBuffer+1, RxBufferSize-1, key, RxBuffer+1);
 
-    printf("RxPayload: ");
+    printf("Decrypted RxPayload: ");
     for (int i = 0; i < RxBufferSize; ++i) {
         printf("%02X", RxBuffer[i]);
     }
@@ -403,12 +476,14 @@ void GetJoinRxPacketInfo(uint8_t* key) {
 
 uint16_t GetRxPacketInfo() {
 
-    Radio.GetPayload( RxBuffer, &RxBufferSize, BUFFER_SIZE );
-    Radio.GetPacketStatus( &PacketStatus );
+    // Radio.GetPayload( RxBuffer, &RxBufferSize, BUFFER_SIZE );
+    // Radio.GetPacketStatus( &PacketStatus );
+
+    while(RX_LED == 1);
 
     uint16_t fcnt = RxBuffer[7] << 8 | RxBuffer[6];
 
-    printf("Rx %d Bytes Snr: %d Rssi: %d FCNT: %u\r\n", RxBufferSize, PacketStatus.LoRa.SnrPkt, PacketStatus.LoRa.RssiPkt, fcnt);
+    printf("Rx %d Bytes Rssi: %d FCNT: %u\r\n", RxBufferSize, /*PacketStatus.LoRa.SnrPkt,*/ RxRssi, fcnt);
     printf("RxPayload: ");
     for (int i = 0; i < RxBufferSize; ++i) {
         printf("%02X", RxBuffer[i]);
@@ -556,7 +631,8 @@ void EncryptPacket(uint8_t payload_size, uint8_t tx_mac_cmd_size, uint8_t port, 
     }
     printf("\r\n");
 
-    PacketParams.Params.LoRa.PayloadLength = localPayloadSize;
+    //PacketParams.params.lora.PayloadLength = localPayloadSize;
+    TxBufferSize = localPayloadSize;
 }
 
 uint8_t DecryptPayload(uint8_t* mac_cmd_buffer) {
@@ -589,7 +665,7 @@ uint8_t DecryptPayload(uint8_t* mac_cmd_buffer) {
 
 
 void reset_func(int argc, char **argv) {
-    HAL_NVIC_SystemReset();
+    //HAL_NVIC_SystemReset();
 }
 
 void run_func(int argc, char **argv) {
@@ -770,7 +846,7 @@ void power_func(int argc, char **argv) {
         int val = 1;
         if (sscanf(argv[1], "%d", &val)) {
             device_config.settings.TxPower = val;
-            Radio.SetTxParams( device_config.settings.TxPower, RADIO_RAMP_20_US );
+            // Radio.SetTxParams( device_config.settings.TxPower, RADIO_RAMP_20_US );
             printf(ok_str);
         } else {
             printf(invalid_args_str);
@@ -813,38 +889,77 @@ void join_func(int argc, char **argv) {
 
     printf(ok_str);
 
-    static uint32_t nonce = time(NULL);
+    static uint32_t nonce = time(NULL) + 26500;
 
     rx_1_time_out = 5000;
     rx_2_datarate = 0;
     
-    printf("DevNonce: %lu\r\n",  nonce);
-
+    printf("DevNonce: %lu, 0x%02X\r\n",  nonce, nonce);
+    
     FillJoinRequest(join_request, nonce, device_config.settings.AppKey);
 
-    printf("JoinRequest: ");
-    for (int i = 0; i < 23; ++i) {
+    printf("JoinRequest: |");
+    for (int i = 0; i < 23; i++) {
+        if( i == 1 || i == 9 || i == 17 || i == 19) printf("|");
+        printf("%02X", join_request[i]);
+    }
+    printf("|\r\n");
+
+    printf("----MAC HDR:  ");
+    printf("%02X", join_request[0]);
+
+    printf("\r\n----JoinEUI:  ");
+    for (int i = 1; i < 9; i++) {
+        printf("%02X", join_request[i]);
+    }
+
+    printf("\r\n----DevEUI:   ");
+    for (int i = 9; i < 17; i++) {
+        printf("%02X", join_request[i]);
+    }
+
+    printf("\r\n----DevNonce: ");
+    for (int i = 17; i < 19; i++) {
         printf("%02X", join_request[i]);
     }
     printf("\r\n");
 
-    ChooseRandomChannel();
+    printf("----MIC:      ");
+    for (int i = 19; i < 23; i++) {
+        printf("%02X", join_request[i]);
+    }
+    printf("\r\n");
+
     SetTxMode();
+    ChooseRandomChannel();
 
     printf("SendPayload\r\n");
-    Radio.SendPayload( join_request, 23, ( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, 2000 } );
+    //Radio.SendPayload( join_request, 23, ( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, 2000 } );
+    Radio.lock();
+    Radio.set_max_payload_length(MODEM_LORA, 23);
+    Radio.send( join_request, 23 );
+    Radio.unlock();
+    TX_LED = 1;
 
     // Wait for TxDone
+    printf("Waiting for TxDone\r\n");
     while (TX_LED) {
-        ProcessRadioEvents(1);
+        ThisThread::sleep_for(1); // wait for txdone event
+        //ProcessRadioEvents(1);
     }
+    //ProcessRadioEvents(rx_1_time_out - RX_EARLY_MS);
 
-    ProcessRadioEvents(rx_1_time_out - RX_EARLY_MS);
-
+    // Join Delay
+    ThisThread::sleep_for(4500);
+    
     // RX 1
-    printf("Open Rx1\r\n");
-    SetRxMode(0, rx_1_datarate);
-    Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, RX_TIMEOUT_MS });
+    printf("Open Rx1..\r\n");
+    printf("Rx1 Channel = %lu\r\n", rx1_channels[tx_channel_index]);
+    SetRxMode(rx1_channels[tx_channel_index], rx_1_datarate);    // may need to modify SetRxMode to include timeout.
+    while(RX_LED) {
+        ThisThread::sleep_for(50);
+    }
+    //Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, RX_TIMEOUT_MS });
 
     ProcessRadioEvents(995);
 
@@ -852,7 +967,7 @@ void join_func(int argc, char **argv) {
         // RX 2
         printf("Open Rx2\r\n");
         SetRxMode(rx2_channel, rx_2_datarate);
-        Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, RX_TIMEOUT_MS });
+        //Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, RX_TIMEOUT_MS });
         ProcessRadioEvents(1000);
     }
 
@@ -907,8 +1022,9 @@ void recv_func(int argc, char **argv) {
         SetRxMode(freq, device_config.settings.TxDataRate);
 
         uint16_t rx_timeout = (uint16_t)(timeout > 0 ? timeout : 30000);
-        Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, rx_timeout });
+        //Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, rx_timeout });
         ProcessRadioEvents( rx_timeout );
+        while( RX_LED == 1 );   // this is probably wrong
 
         if (packet_rxd) {
             uint8_t mac_cmd_buffer[20];
@@ -962,7 +1078,7 @@ void recv_func(int argc, char **argv) {
                         if (mac_cmd_buffer[i] == 0x06) {
                             // 0 byte payload
                             tx_mac_cmd_buffer[tx_mac_cmd_size++] = 0x06;                      // Command ID
-                            tx_mac_cmd_buffer[tx_mac_cmd_size++] = PacketStatus.LoRa.SnrPkt;  // Received Packet SNR
+                            tx_mac_cmd_buffer[tx_mac_cmd_size++] = RxRssi;  // Received Packet SNR
                             tx_mac_cmd_buffer[tx_mac_cmd_size++] = 0xFF;                      // Battery Level
                         }
                     }
@@ -1013,7 +1129,8 @@ void sendi_func(int argc, char **argv) {
 }
 
 void send_func(int argc, char **argv) {
-    
+    TX_LED = 1;
+
     printf(ok_str);
 
     InitTxPacket(false, device_config.settings.Port);
@@ -1045,34 +1162,49 @@ void send_func(int argc, char **argv) {
     payload_size = 6; // Port (1) + Payload Bytes (5)
 
     EncryptPacket(payload_size, tx_mac_cmd_size, device_config.settings.Port, device_config.session.UplinkCounter);
-    ChooseRandomChannel();
+
     SetTxMode();
+    ChooseRandomChannel();
 
     printf("Sending packet FCNT: %lu\r\n", device_config.session.UplinkCounter);
-    Radio.SendPayload( Buffer, PacketParams.Params.LoRa.PayloadLength, ( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, 10000 } );
+    //Radio.SendPayload( Buffer, TxBufferSize, ( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, 10000 } );
+  
+    Radio.lock();
+    Radio.set_max_payload_length(MODEM_LORA, TxBufferSize);
+    Radio.send( Buffer, TxBufferSize );
+    Radio.unlock();
 
     tx_mac_cmd_size = 0;
 
     // Wait for TxDone
     while (TX_LED) {
-        ProcessRadioEvents(1);
+        ThisThread::sleep_for(100);
+
     }
 
-    ProcessRadioEvents(rx_1_time_out - RX_EARLY_MS);
+    //ProcessRadioEvents(rx_1_time_out - RX_EARLY_MS);
 
     // RX 1
     printf("Open Rx1\r\n");
-    SetRxMode(0, (rx_1_datarate > rx_1_offset) ? (rx_1_datarate - rx_1_offset) : 0);
-    Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, RX_TIMEOUT_MS });
+    printf("Rx1 Channel = %lu\r\n", rx1_channels[tx_channel_index]);
+    
+    // Rx1 Delay
+    ThisThread::sleep_for(500);
+    
+    SetRxMode(rx1_channels[tx_channel_index], 0);
 
-    ProcessRadioEvents(995);
+    //Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, RX_TIMEOUT_MS });
+    while(RX_LED) {
+        ThisThread::sleep_for(50);
+    }
+    // ProcessRadioEvents(995);
 
     if (!packet_rxd) {
         // RX 2
         printf("Open Rx2\r\n");
         SetRxMode(rx2_channel, rx_2_datarate);
-        Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, RX_TIMEOUT_MS });
-        ProcessRadioEvents(1000);
+        //Radio.SetRx(( TickTime_t ){ RX_TIMEOUT_TICK_SIZE, RX_TIMEOUT_MS });
+        //ProcessRadioEvents(1000);
     }
 
     if (packet_rxd) {
@@ -1127,7 +1259,7 @@ void send_func(int argc, char **argv) {
                     if (mac_cmd_buffer[i] == 0x06) {
                         // 0 byte payload
                         tx_mac_cmd_buffer[tx_mac_cmd_size++] = 0x06;                      // Command ID
-                        tx_mac_cmd_buffer[tx_mac_cmd_size++] = PacketStatus.LoRa.SnrPkt;  // Received Packet SNR
+                        tx_mac_cmd_buffer[tx_mac_cmd_size++] = RxRssi;  // Received Packet SNR
                         tx_mac_cmd_buffer[tx_mac_cmd_size++] = 0xFF;                      // Battery Level
                     }
                 }
@@ -1147,11 +1279,11 @@ void send_func(int argc, char **argv) {
 
 
 void tinysh_char_out(unsigned char c) {
-    pc.putc(c);
+    pc.write(&c, 1);
 }
 
 void tinyshell_thread() {
-    pc.printf("Multitech Sx1280 LoRaWAN shell\r\nBuilt: %s %s\r\n", __DATE__, __TIME__);
+    pc.write("Multitech Sx1262 LoRaWAN shell\r\n", 32);
 
     tinysh_set_prompt(prompt);
     tinysh_add_command(&reset_cmd);
@@ -1179,7 +1311,7 @@ void tinyshell_thread() {
     tinysh_add_command(&app_port_cmd);
     
     while (!exit_cmd_mode) {
-        tinysh_char_in(pc.getc());
+        if(pc.read(&ser_buf, 1) == 1) tinysh_char_in(ser_buf);
     }
 
 }

@@ -29,7 +29,9 @@
 #include "mbed.h"
 #include "tinysh.h"
 #include "config.h"
-#include "sx1280-hal.h"
+// #include "sx126x-hal.h"
+#include "lorawan/LoRaRadio.h"
+#include "SX126X_LoRaRadio.h"
 #include "Crypto.h"
 
 

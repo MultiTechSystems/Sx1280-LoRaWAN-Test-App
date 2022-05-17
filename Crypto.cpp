@@ -144,6 +144,7 @@ void Crypto::JoinComputeMic(const uint8_t *buffer, uint16_t size, const uint8_t 
     AES_CMAC_Final(Mic, AesCmacCtx);
 
     *mic = (uint32_t) (Mic[3] << 24 | Mic[2] << 16 | Mic[1] << 8 | Mic[0]);
+
 }
 
 void Crypto::JoinDecrypt(uint8_t *buffer, uint16_t size, uint8_t *key, uint8_t *decBuffer)

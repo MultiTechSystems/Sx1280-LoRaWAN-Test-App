@@ -1,0 +1,38 @@
+{
+    "config": {
+        "main_stack_size":     { "value": 4096 }
+    },
+    "target_overrides": {
+        "*": {
+            "platform.stdio-convert-newlines": true,
+            "platform.stdio-baud-rate": 115200,
+            "platform.default-serial-baud-rate": 115200,
+            "mbed-trace.enable": true,
+            "mbed-trace.max-level": "TRACE_LEVEL_DEBUG",
+            "lora.over-the-air-activation": true,
+            "lora.duty-cycle-on": true,
+            "lora.phy": "US915",
+            "lora.device-eui": "{ 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0xF0 }",
+            "lora.application-eui": "{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34 }",
+            "lora.application-key": "{ 0x11, 0xEE, 0x11, 0xEE, 0x11, 0xEE, 0x11, 0xEE, 0x11, 0xEE, 0x11, 0xEE, 0x11, 0xEE, 0x11, 0xEE }"
+        },
+
+        "MAX32670_LORA": {
+            "target.components_add":                ["SX126X"],
+            "SX126X-lora-driver.spi-mosi":          "SPI1_MOSI",
+            "SX126X-lora-driver.spi-miso":          "SPI1_MISO",
+            "SX126X-lora-driver.spi-sclk":          "SPI1_SCK",
+            "SX126X-lora-driver.spi-cs":            "SPI1_SS",
+            "SX126X-lora-driver.reset":             "P0_20",
+            "SX126X-lora-driver.dio1":              "P0_22",
+            "SX126X-lora-driver.busy":              "P0_21",
+            "SX126X-lora-driver.freq-select":       "NC",
+            "SX126X-lora-driver.device-select":     "NC",
+            "SX126X-lora-driver.crystal-select":    "NC",
+            "SX126X-lora-driver.ant-switch":        "NC",
+            "SX126X-lora-driver.freq-support":      0,
+            "SX126X-lora-driver.device-variant":    "SX1262",
+            "SX126X-lora-driver.xtal":              -1
+        }
+    }
+}

@@ -1,0 +1,5 @@
+{
+    "MAX32670_LORA": {
+        "inherits": ["MAX32670EVKIT"]
+    }
+}

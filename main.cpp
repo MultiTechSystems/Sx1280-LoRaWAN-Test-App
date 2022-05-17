@@ -3,8 +3,8 @@
 ConfigManager config_mng;
 DeviceConfig_t device_config;
 
-Serial pc(USBTX, USBRX);
-
+BufferedSerial pc(USBTX, USBRX);
+char ser_buf[32] = {0};
 
 void wait_for_command() {
     bool cmd_mode = false;
@@ -40,12 +40,11 @@ int main(void)
     // Digital Pins D3, D5, D7, D11, D12, D13 used by the Radio
     // (A0 used for Radio Reset, A3 used for Antenna Switch)
 
-
     config_mng.Load(device_config);
 
-    pc.baud(115200);
+    pc.set_baud(115200);
 
-    printf("Initializing...\r\n");
+    printf("\r\nInitializing...\r\n");
 
     InitApplication();
     SetupRadio();

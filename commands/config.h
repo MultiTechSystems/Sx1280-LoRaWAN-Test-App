@@ -221,7 +221,7 @@ typedef struct {
 
         uint8_t Rx1Delay;
         uint8_t Datarate;
-        uint8_t TxPower;
+        int8_t TxPower; // SX126X_LoRaRadio takes int8_t.
         uint8_t Repeat;
 
         uint32_t Rx2Frequency;
