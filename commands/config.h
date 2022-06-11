@@ -38,6 +38,7 @@
 #include <stdint.h>
 #include "inttypes.h"
 
+#include "sx1280.h"
 
 #ifndef __MTS_LORAWAN_CONFIG__
 #define __MTS_LORAWAN_CONFIG__
@@ -266,6 +267,7 @@ typedef struct {
 typedef struct {
         bool DutyCycleEnabled;
         uint32_t TxInterval;
+        RadioLoRaBandwidths_t Bandwidth;
 } ApplicationSettings_t;
 
 typedef struct {

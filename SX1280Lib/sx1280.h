@@ -1001,7 +1001,7 @@ private:
      */
     bool PollingMode;
 
-    /*! 
+    /*!
      * \brief Compute the two's complement for a register of size lower than
      *        32bits
      *
@@ -1542,14 +1542,14 @@ public:
      * \param [in]  seed          Initial LFSR value
      */
     void SetWhiteningSeed( uint8_t seed );
-    
+
     /*!
      * \brief Enable manual gain control and disable AGC
      *
      * \see SX1280::SetManualGainValue, SX1280::DisableManualGain
      */
     void EnableManualGain( void );
-    
+
     /*!
      * \brief Disable the manual gain control and enable AGC
      *

@@ -62,6 +62,7 @@ tinysh_cmd_t recv_cmd = { 0, "recv", "recv packet", "<TIMEOUT>", recv_func, 0, 0
 tinysh_cmd_t channels_cmd = { 0, "channels", "list channels", "", channels_func, 0, 0, 0 };
 tinysh_cmd_t channel_index_cmd = { 0, "index", "current channel index", "0-2,-1", channel_index_func, 0, 0, 0 };
 tinysh_cmd_t datarate_cmd = { 0, "datarate", "datarate setting", "0-15", datarate_func, 0, 0, 0 };
+tinysh_cmd_t bandwidth_cmd = { 0, "bandwidth", "bandwidth setting", "200,400,800,1600", bandwidth_func, 0, 0, 0 };
 tinysh_cmd_t power_cmd = { 0, "power", "power setting", "0-15", power_func, 0, 0, 0 };
 
 tinysh_cmd_t app_port_cmd = { 0, "port", "application port", "0-255", app_port_func, 0, 0, 0 };
@@ -285,7 +286,8 @@ void OnCadDone( bool channelActivityDetected )
 }
 
 int tx_channel_index = -1;
-uint32_t tx_channels[] = { 2403000000U, 2479000000U, 2425000000U };
+int tx_channel_count = 3;
+uint32_t tx_channels[] = { 2403000000U, 2479000000U, 2425000000U, 0U, 0U, 0U };
 uint32_t rx2_channel = 2423000000U;
 
 
@@ -294,7 +296,7 @@ void SetupRadio() {
     PacketParams.PacketType = PACKET_TYPE_LORA;
     ModulationParams.Params.LoRa.SpreadingFactor = LORA_SF12;
     ModulationParams.Params.LoRa.Bandwidth = LORA_BW_0800;
-    ModulationParams.Params.LoRa.CodingRate = LORA_CR_4_8;
+    ModulationParams.Params.LoRa.CodingRate = LORA_CR_LI_4_7;
     PacketParams.Params.LoRa.PreambleLength = 8;
     PacketParams.Params.LoRa.HeaderType = LORA_PACKET_EXPLICIT;
     PacketParams.Params.LoRa.PayloadLength = 23;
@@ -307,7 +309,6 @@ void SetupRadio() {
     Radio.SetTxParams( 10, RADIO_RAMP_20_US );
     Radio.SetPollingMode();
 
-    
     memset(join_request, 0, 23);
     memset(tx_mac_cmd_buffer, 0, 20);
 }
@@ -330,9 +331,9 @@ void FillJoinRequest(uint8_t* buffer, uint16_t nonce, uint8_t* key) {
 }
 
 void ChooseRandomChannel() {
-    int i = rand() % 3;
+    int i = rand() % tx_channel_count;
 
-    if (tx_channel_index != -1 && tx_channel_index < 3)
+    if (tx_channel_index != -1 && tx_channel_index < tx_channel_count)
         i = tx_channel_index;
 
     printf("Using channel %u : %lu\r\n", i, tx_channels[i]);
@@ -342,6 +343,7 @@ void ChooseRandomChannel() {
 void SetTxMode() {
     PacketParams.Params.LoRa.Crc = LORA_CRC_ON;
     PacketParams.Params.LoRa.InvertIQ = LORA_IQ_NORMAL;
+    ModulationParams.Params.LoRa.Bandwidth = LORA_BW_0800;
     Radio.SetPacketParams( &PacketParams );
 
     ModulationParams.Params.LoRa.SpreadingFactor = static_cast<RadioLoRaSpreadingFactors_t>((12) << 4);
@@ -357,6 +359,7 @@ void SetTxMode() {
 void SetRxMode(uint32_t freq, uint8_t dr) {
     PacketParams.Params.LoRa.Crc = LORA_CRC_OFF;
     PacketParams.Params.LoRa.InvertIQ = LORA_IQ_INVERTED;
+    ModulationParams.Params.LoRa.Bandwidth = LORA_BW_0800;
     Radio.SetPacketParams( &PacketParams );
 
     ModulationParams.Params.LoRa.SpreadingFactor = static_cast<RadioLoRaSpreadingFactors_t>((12 - dr) << 4);
@@ -419,16 +422,16 @@ uint16_t GetRxPacketInfo() {
 }
 
 uint32_t read_u32(uint8_t* buff) {
-    return buff[0] << 24 
-        | buff[1] << 16 
-        | buff[2] << 8 
+    return buff[0] << 24
+        | buff[1] << 16
+        | buff[2] << 8
         | buff[3] << 0;
 }
 
 uint32_t read_u32_r(uint8_t* buff) {
-    return buff[3] << 24 
-        | buff[2] << 16 
-        | buff[1] << 8 
+    return buff[3] << 24
+        | buff[2] << 16
+        | buff[1] << 8
         | buff[0] << 0;
 }
 
@@ -508,6 +511,22 @@ int UnpackJoinAccept(uint8_t* key, uint16_t nonce) {
 
     if (RxBufferSize > 17) {
         // Additional Channels
+        uint32_t freq = 0;
+        int i = 13;
+
+        for (int chan = 3; chan < 6; chan++) {
+            freq |= RxBuffer[i+2];
+            freq = freq << 8;
+            freq |= RxBuffer[i+1];
+            freq = freq << 8;
+            freq |= RxBuffer[i];
+            freq *= 200;
+            if (freq > 24e8 && freq != 0) {
+                printf("Add Chan: %lu\r\n", freq);
+                tx_channels[tx_channel_count++] = freq;
+            }
+            i+=3;
+        }
     }
 
     return rx_1_time_out;
@@ -715,6 +734,50 @@ void datarate_func(int argc, char **argv) {
     }
 }
 
+void bandwidth_func(int argc, char **argv) {
+    if (argc == 1) {
+        int val = 800;
+        switch (device_config.app_settings.Bandwidth) {
+            case LORA_BW_1600:
+                val = 1600;
+                break;
+            case LORA_BW_0800:
+                val = 800;
+                break;
+            case LORA_BW_0400:
+                val = 400;
+                break;
+            case LORA_BW_0200:
+                val = 200;
+                break;
+        }
+        printf("\r\nBW%u\r\n", val);
+    } else if (argc == 2) {
+        int val = 1;
+        if (sscanf(argv[1], "%d", &val) && val >= 0 && val <= 1700) {
+            switch (val) {
+                case 1600:
+                    device_config.app_settings.Bandwidth = LORA_BW_1600;
+                    break;
+                case 800:
+                    device_config.app_settings.Bandwidth = LORA_BW_0800;
+                    break;
+                case 400:
+                    device_config.app_settings.Bandwidth = LORA_BW_0400;
+                    break;
+                case 200:
+                    device_config.app_settings.Bandwidth = LORA_BW_0200;
+                    break;
+            }
+            printf(ok_str);
+        } else {
+            printf(invalid_args_str);
+        }
+    } else {
+        printf(invalid_args_str);
+    }
+}
+
 void app_port_func(int argc, char **argv) {
     if (argc == 1) {
         printf("\r\n%d\r\n", device_config.settings.Port);
@@ -784,7 +847,7 @@ void power_func(int argc, char **argv) {
 void channels_func(int argc, char **argv) {
     if (argc == 1) {
         for (int i = 0; i < 3; i++) {
-            printf("\r\nchan %d : %lu", i, tx_channels[i]);         
+            printf("\r\nchan %d : %lu", i, tx_channels[i]);
         }
         printf(ok_str);
     } else {
@@ -795,7 +858,7 @@ void channels_func(int argc, char **argv) {
 
 void channel_index_func(int argc, char **argv) {
     if (argc == 1) {
-        printf("\r\n%d\r\n", tx_channel_index);        
+        printf("\r\n%d\r\n", tx_channel_index);
     } else if (argc == 2) {
         int val = 1;
         if (sscanf(argv[1], "%d", &val) && val >= -1 && val < 3) {
@@ -817,7 +880,7 @@ void join_func(int argc, char **argv) {
 
     rx_1_time_out = 5000;
     rx_2_datarate = 0;
-    
+
     printf("DevNonce: %lu\r\n",  nonce);
 
     FillJoinRequest(join_request, nonce, device_config.settings.AppKey);
@@ -861,12 +924,12 @@ void join_func(int argc, char **argv) {
 
         if (CheckJoinMic(device_config.settings.AppKey)) {
             rx_1_time_out = UnpackJoinAccept(device_config.settings.AppKey, nonce);
-            joined = true;            
+            joined = true;
         }
     }
 
     nonce++;
-    
+
 }
 
 void recv_func(int argc, char **argv) {
@@ -899,7 +962,7 @@ void recv_func(int argc, char **argv) {
     if (tx_channel_index != -1)
         freq = tx_channels[tx_channel_index];
 
-    
+
     do {
         packet_rxd = false;
 
@@ -917,11 +980,11 @@ void recv_func(int argc, char **argv) {
 
             // Check MIC
             // TODO: Handle 16-bit rollover
-            if (CheckMic(device_config.session.NetworkKey, fcnt) 
+            if (CheckMic(device_config.session.NetworkKey, fcnt)
                 && device_config.session.DownlinkCounter < fcnt) {
-                
+
                 device_config.session.DownlinkCounter = fcnt;
-            
+
                 mac_cmd_size = DecryptPayload(mac_cmd_buffer);
 
                 if (RxBufferSize - mac_cmd_size > 13) {
@@ -1013,7 +1076,7 @@ void sendi_func(int argc, char **argv) {
 }
 
 void send_func(int argc, char **argv) {
-    
+
     printf(ok_str);
 
     InitTxPacket(false, device_config.settings.Port);
@@ -1082,11 +1145,11 @@ void send_func(int argc, char **argv) {
 
         // Check MIC
         // TODO: Handle 16-bit rollover
-        if (CheckMic(device_config.session.NetworkKey, fcnt) 
+        if (CheckMic(device_config.session.NetworkKey, fcnt)
             && device_config.session.DownlinkCounter < fcnt) {
-            
+
             device_config.session.DownlinkCounter = fcnt;
-           
+
             mac_cmd_size = DecryptPayload(mac_cmd_buffer);
 
             if (RxBufferSize - mac_cmd_size > 13) {
@@ -1155,11 +1218,11 @@ void tinyshell_thread() {
 
     tinysh_set_prompt(prompt);
     tinysh_add_command(&reset_cmd);
-    
+
     tinysh_add_command(&deveui_cmd);
     tinysh_add_command(&appeui_cmd);
     tinysh_add_command(&appkey_cmd);
-    
+
     tinysh_add_command(&join_cmd);
     tinysh_add_command(&send_cmd);
     tinysh_add_command(&sendi_cmd);
@@ -1170,14 +1233,29 @@ void tinyshell_thread() {
     tinysh_add_command(&appskey_cmd);
     tinysh_add_command(&ucnt_cmd);
     tinysh_add_command(&dcnt_cmd);
-    
+
     tinysh_add_command(&channels_cmd);
     tinysh_add_command(&channel_index_cmd);
     tinysh_add_command(&power_cmd);
     tinysh_add_command(&datarate_cmd);
+    tinysh_add_command(&bandwidth_cmd);
 
     tinysh_add_command(&app_port_cmd);
-    
+
+    // char* cmd1[1] = { "join" };
+    // char* cmd2[1] = { "sendi" };
+
+    // while (!joined) {
+    //     join_func(1, cmd1);
+    //     ThisThread::sleep_for(10000);
+    // }
+
+    // while (true) {
+    //     sendi_func(1, cmd2);
+    //     ThisThread::sleep_for(10000);
+    // }
+
+
     while (!exit_cmd_mode) {
         tinysh_char_in(pc.getc());
     }

@@ -53,7 +53,7 @@ void ConfigManager::Wakeup() {
 }
 
 void ConfigManager::Load(DeviceConfig_t& dc) {
-    DefaultProtected(dc);    
+    DefaultProtected(dc);
     DefaultSettings(dc);
     DefaultSession(dc);
     Default(dc);
@@ -61,6 +61,7 @@ void ConfigManager::Load(DeviceConfig_t& dc) {
 
 void ConfigManager::DefaultSettings(DeviceConfig_t& dc) {
     dc.settings.TxPower = 10;
+    dc.settings.PublicNetwork = true;
 }
 
 void ConfigManager::DefaultSession(DeviceConfig_t& dc) {
@@ -74,5 +75,6 @@ void ConfigManager::DefaultProtected(DeviceConfig_t& dc) {
 void ConfigManager::Default(DeviceConfig_t& dc) {
     memcpy(dc.settings.AppEUI, appEUI, 8);
     memcpy(dc.settings.AppKey, appKey, 16);
+    dc.app_settings.Bandwidth = LORA_BW_0800;
 }
 

@@ -46,6 +46,7 @@ void appkey_func(int argc, char **argv);
 void channels_func(int argc, char **argv);
 void channel_index_func(int argc, char **argv);
 void datarate_func(int argc, char **argv);
+void bandwidth_func(int argc, char **argv);
 void power_func(int argc, char **argv);
 
 void join_func(int argc, char **argv);
